@@ -2,13 +2,14 @@ name: Flutter Tag Build VUMSTAR
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
-      - '[0-9]+.[0-9]+.[0-9]+'
-      - 'v[0-9]+.[0-9]+.[0-9]+-[0-9]+'
-      - '[0-9]+.[0-9]+.[0-9]+-[0-9]+'
-
+  # Tag-triggered VUMSTAR builds are paused while Windows-only testing.
+  # push:
+  # tags:
+  # - 'v[0-9]+.[0-9]+.[0-9]+'
+  # - '[0-9]+.[0-9]+.[0-9]+'
+  # - 'v[0-9]+.[0-9]+.[0-9]+-[0-9]+'
+  # - '[0-9]+.[0-9]+.[0-9]+-[0-9]+'
+  #
 jobs:
   run-flutter-tag-build:
     uses: ./.github/workflows/flutter-build-vumstar.yml

@@ -2,6 +2,11 @@ name: Flutter Tag Build
 
 on:
   workflow_dispatch:
+    inputs:
+      windows-only:
+        description: "Only build Windows targets (uncheck for a full build)"
+        type: boolean
+        default: true
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
@@ -22,3 +27,4 @@ jobs:
       upload-artifact: true
       upload-tag: ${{ github.ref_name }}
       publish-update-metadata: ${{ github.repository == 'rustdesk/rustdesk' }}
+      windows-only: ${{ github.event_name != 'workflow_dispatch' || inputs.windows-only }}
