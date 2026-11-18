@@ -9,6 +9,11 @@ on:
       - 'v[0-9]+.[0-9]+.[0-9]+-[0-9]+'
       - '[0-9]+.[0-9]+.[0-9]+-[0-9]+'
 
+# The called workflow has jobs requesting `contents: write` (generate-sbom,
+# publish-signed-update-metadata). Forks default the token to read-only, so
+# the reusable-workflow permission check rejects the run before any job starts.
+permissions: write-all
+
 jobs:
   run-flutter-tag-build:
     uses: ./.github/workflows/flutter-build.yml
