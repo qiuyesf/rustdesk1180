@@ -940,9 +940,25 @@ impl Config {
                     })
                 })
                 .unwrap_or_else(|| PathBuf::from("."));
+            let rel = p.as_ref().to_path_buf();
             path.push(APP_NAME.read().unwrap().as_str()); // 不同 exe 名 → 不同子目录
-            path.push(p);
+            path.push(&rel);
             fs::create_dir_all(&path).ok();
+            // One-time migration: earlier green builds kept config under
+            // %LOCALAPPDATA%\rustdesk\<APP_NAME>\. Copy it over so IDs, keys and
+            // passwords survive the switch to the fully portable layout. Old
+            // files are kept untouched.
+            if !rel.as_os_str().is_empty() && !path.exists() {
+                if let Some(old_root) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+                    let old = old_root
+                        .join("rustdesk")
+                        .join(APP_NAME.read().unwrap().as_str())
+                        .join(&rel);
+                    if old.is_file() {
+                        let _ = fs::copy(&old, &path);
+                    }
+                }
+            }
             return path;
         }
         // >>> END GREEN MODE <<<
