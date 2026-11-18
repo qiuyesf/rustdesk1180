@@ -22,6 +22,9 @@ const APP_PREFIX: &str = "rustdesk";
 #[cfg(windows)]
 const VERIFIED_UPDATE_FILE_PREFIX: &str = "rustdesk-verified-";
 const APPNAME_RUNTIME_ENV_KEY: &str = "RUSTDESK_APPNAME";
+// The launcher's directory: the green config root stays there while the
+// extracted runtime directory is disposable.
+const APPDIR_RUNTIME_ENV_KEY: &str = "RUSTDESK_APPDIR";
 #[cfg(windows)]
 const SET_FOREGROUND_WINDOW_ENV_KEY: &str = "SET_FOREGROUND_WINDOW";
 
@@ -35,6 +38,35 @@ fn app_dir_name(exe: &str) -> String {
         .map(|stem| stem.trim().to_lowercase())
         .filter(|stem| !stem.is_empty())
         .unwrap_or_else(|| APP_PREFIX.to_owned())
+}
+
+// Extract beside the launcher, with one runtime directory per launcher name so
+// differently named clients in the same folder never share extracted files.
+// Probing write access keeps read-only locations (program directories, locked
+// drives) working by falling back to the stock %LOCALAPPDATA% location.
+fn green_extract_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let parent = exe.parent()?;
+    let stem = exe.file_stem()?.to_string_lossy();
+    let prefix = format!(".rustdesk-{}-", stem);
+    let current = format!("{}{}", prefix, std::process::id());
+    // Best-effort cleanup of leftovers from earlier runs. A directory still in
+    // use cannot be removed on Windows, which protects running instances.
+    if let Ok(entries) = std::fs::read_dir(parent) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with(&prefix) && name.as_ref() != current.as_str() {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    let dir = parent.join(&current);
+    std::fs::create_dir_all(&dir).ok()?;
+    let probe = dir.join(".writable");
+    std::fs::write(&probe, b"").ok()?;
+    let _ = std::fs::remove_file(&probe);
+    Some(dir)
 }
 
 fn is_timestamp_matches(dir: &Path, ts: &mut u64) -> bool {
@@ -160,27 +192,34 @@ fn setup(
     clear: bool,
     _args: &Vec<String>,
     _ui: &mut bool,
-) -> Option<PathBuf> {
-    let dir = if let Some(dir) = dir {
-        dir
+) -> Option<(PathBuf, PathBuf, bool)> {
+    // `disposable` marks a runtime directory created by this launcher: it is
+    // rebuilt on every start and removed once the child process exits.
+    let (dir, disposable) = if let Some(dir) = dir {
+        (dir, false)
+    } else if let Some(dir) = green_extract_dir() {
+        (dir, true)
+    } else if let Some(dir) = dirs::data_local_dir() {
+        (dir.join(app_dir_name(&reader.exe)), false)
     } else {
-        // home dir
-        if let Some(dir) = dirs::data_local_dir() {
-            dir.join(app_dir_name(&reader.exe))
-        } else {
-            eprintln!("not found data local dir");
-            return None;
-        }
+        eprintln!("not found data local dir");
+        return None;
     };
 
     let mut ts = 0;
-    if clear || !is_timestamp_matches(&dir, &mut ts) {
+    if clear || disposable || !is_timestamp_matches(&dir, &mut ts) {
         #[cfg(windows)]
         if _args.is_empty() {
             *_ui = true;
-            ui::setup();
+            // The splash window has no auto-close event. The green launcher now
+            // waits for the child, so showing it would keep the splash on screen
+            // for the whole session. Keep it for the legacy AppData mode only.
+            if !disposable {
+                ui::setup();
+            }
         }
         std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).ok();
     }
     let mut metadata_paths = reader.package_paths.clone();
     metadata_paths.extend(remove_dropped_package_files(&dir, &reader.package_paths));
@@ -192,7 +231,7 @@ fn setup(
     win::copy_runtime_broker(&dir);
     #[cfg(linux)]
     reader.configure_permission(&dir);
-    Some(dir.join(&reader.exe))
+    Some((dir.join(&reader.exe), dir, disposable))
 }
 
 fn use_null_stdio() -> bool {
@@ -229,11 +268,15 @@ fn is_windows_7() -> bool {
     false
 }
 
-fn execute(path: PathBuf, args: Vec<String>, _ui: bool) {
+fn execute(path: PathBuf, extract_dir: PathBuf, disposable: bool, args: Vec<String>, _ui: bool) {
     println!("executing {}", path.display());
     // setup env
     let exe = std::env::current_exe().unwrap_or_default();
     let exe_name = exe.file_name().unwrap_or_default();
+    let exe_dir = exe
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
     // run executable
     let mut cmd = Command::new(path);
     cmd.args(args);
@@ -247,6 +290,9 @@ fn execute(path: PathBuf, args: Vec<String>, _ui: bool) {
     }
 
     cmd.env(APPNAME_RUNTIME_ENV_KEY, exe_name);
+    // Config must live beside the launcher, not inside the disposable runtime
+    // directory that is removed after the process exits.
+    cmd.env(APPDIR_RUNTIME_ENV_KEY, exe_dir.as_os_str());
     if use_null_stdio() {
         cmd.stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -256,18 +302,24 @@ fn execute(path: PathBuf, args: Vec<String>, _ui: bool) {
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit());
     }
-    let _child = cmd.spawn();
 
-    #[cfg(windows)]
-    if _ui {
-        match _child {
-            Ok(child) => unsafe {
-                winapi::um::winuser::AllowSetForegroundWindow(child.id() as u32);
-            },
-            Err(e) => {
-                eprintln!("{:?}", e);
+    match cmd.spawn() {
+        Ok(mut child) => {
+            #[cfg(windows)]
+            if _ui {
+                unsafe {
+                    winapi::um::winuser::AllowSetForegroundWindow(child.id() as u32);
+                }
             }
+            let _ = child.wait();
         }
+        Err(e) => eprintln!("{:?}", e),
+    }
+
+    // Green mode: leave no extracted files behind once RustDesk has closed.
+    // Files still in use make this fail; a later start rebuilds the directory.
+    if disposable {
+        let _ = std::fs::remove_dir_all(&extract_dir);
     }
 }
 
@@ -298,7 +350,7 @@ fn main() -> Result<(), String> {
 
     let mut ui = false;
     let reader = BinaryReader::new()?;
-    if let Some(exe) = setup(
+    if let Some((exe, extract_dir, disposable)) = setup(
         reader,
         None,
         click_setup || args.contains(&"--silent-install".to_owned()),
@@ -310,7 +362,7 @@ fn main() -> Result<(), String> {
         } else if quick_support {
             args = vec!["--quick_support".to_owned()];
         }
-        execute(exe, args, ui);
+        execute(exe, extract_dir, disposable, args, ui);
     }
     Ok(())
 }

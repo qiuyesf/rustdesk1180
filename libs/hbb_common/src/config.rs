@@ -923,12 +923,23 @@ impl Config {
             path.push(p);
             return path;
         }
-        // >>> GREEN MODE: Windows 配置写到 exe 所在目录下的 <APP_NAME>/ <<<
+        // >>> GREEN MODE: 配置写到主程序目录下的 <APP_NAME>/ <<<
         #[cfg(windows)]
         {
-            let mut path = std::env::current_exe()
-                .map(|p| p.parent().unwrap_or_else(|| std::path::Path::new(".")).to_path_buf())
-                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            // The portable launcher passes its own directory via RUSTDESK_APPDIR.
+            // Keeping config there (instead of the extracted runtime directory)
+            // means the extracted files can be deleted on exit without data loss.
+            // Loose builds and installed builds fall back to the exe directory.
+            let mut path = std::env::var_os("RUSTDESK_APPDIR")
+                .map(PathBuf::from)
+                .filter(|p| p.is_dir())
+                .or_else(|| {
+                    std::env::current_exe().ok().and_then(|p| {
+                        p.parent()
+                            .map(|d| d.to_path_buf())
+                    })
+                })
+                .unwrap_or_else(|| PathBuf::from("."));
             path.push(APP_NAME.read().unwrap().as_str()); // 不同 exe 名 → 不同子目录
             path.push(p);
             fs::create_dir_all(&path).ok();

@@ -1539,7 +1539,9 @@ pub fn rename_exe_cmd(src_exe: &str, path: &str) -> ResultType<String> {
         .to_string_lossy()
         .to_string();
     let app_name = crate::get_app_name();
-    if src_exe_filename == format!("{app_name}.exe") {
+    // Windows paths are case-insensitive: rustdesk.exe and RustDesk.exe are the
+    // same file, so a case-only difference must not trigger a `move` onto itself.
+    if src_exe_filename.eq_ignore_ascii_case(&format!("{app_name}.exe")) {
         Ok("".to_owned())
     } else {
         Ok(format!(
@@ -1779,6 +1781,7 @@ copy /Y \"{tmp_path}\\{app_name} Tray.lnk\" \"%PROGRAMDATA%\\Microsoft\\Windows\
 chcp 65001
 md \"{path}\"
 {copy_exe}
+{rename_exe}
 reg add {subkey} /f
 reg add {subkey} /f /v DisplayIcon /t REG_SZ /d \"{display_icon}\"
 reg add {subkey} /f /v DisplayName /t REG_SZ /d \"{app_name}\"
@@ -1810,6 +1813,10 @@ copy /Y \"{tmp_path}\\Uninstall {app_name}.lnk\" \"{path}\\\"
         sleep = if debug { "timeout 300" } else { "" },
         dels = if debug { "" } else { &dels },
         copy_exe = copy_exe_cmd(&src_exe, &exe, &path)?,
+        // The extracted runtime keeps the payload's exe name (rustdesk.exe) while
+        // every later step (shortcuts, service, post-install launch) refers to
+        // <app_name>.exe. Rename right after XCOPY, as update_me already does.
+        rename_exe = rename_exe_cmd(&src_exe, &path)?,
         import_config = get_import_config(&exe),
     );
     run_cmds(
