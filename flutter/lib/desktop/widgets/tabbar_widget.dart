@@ -653,9 +653,12 @@ class _DesktopTabState extends State<DesktopTab>
                         ),
                         Offstage(
                             offstage: !showTitle,
-                            child: const Text(
-                              "RustDesk",
-                              style: TextStyle(fontSize: 13),
+                            // Show the running client's name, not a hard-coded
+                            // brand, so differently named instances can be told
+                            // apart when several of them run side by side.
+                            child: Text(
+                              appName,
+                              style: const TextStyle(fontSize: 13),
                             ).marginOnly(left: 2))
                       ]).marginOnly(
                         left: 5,

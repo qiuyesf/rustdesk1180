@@ -268,15 +268,70 @@ fn is_windows_7() -> bool {
     false
 }
 
+// Mirror of `core_main::init_green_app_name()`: the green config directory is
+// <launcher dir>/<APP_NAME>, where APP_NAME comes from the launcher's own file
+// name. Keep both sides in sync if the naming rules ever change.
+#[cfg(windows)]
+fn green_config_dir_name(exe_name: &std::ffi::OsStr) -> String {
+    let stem = Path::new(exe_name)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if stem.eq_ignore_ascii_case("rustdesk") {
+        return "RustDesk".to_owned();
+    }
+    let safe: String = stem
+        .chars()
+        .map(|c| if "\\/:*?\"<>|".contains(c) { '_' } else { c })
+        .take(64)
+        .collect();
+    if safe.is_empty() {
+        "RustDesk".to_owned()
+    } else {
+        safe
+    }
+}
+
+// Ask once after the child exits. "No" (keep config) is the default button, so
+// an accidental Enter can never wipe the ID, password and settings. A failed
+// MessageBox returns 0, which also keeps the config (fail-safe).
+#[cfg(windows)]
+fn confirm_delete_config(config_name: &str) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    use winapi::um::winuser::{
+        MessageBoxW, IDYES, MB_DEFBUTTON2, MB_ICONQUESTION, MB_TOPMOST, MB_YESNO,
+    };
+    fn wide(s: &str) -> Vec<u16> {
+        std::ffi::OsStr::new(s)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    }
+    let text = wide(&format!(
+        "是否删除本程序的配置文件？\n\n配置文件夹：{config_name}\n日志文件夹：log\n\n选择「是」删除上面两个文件夹（下次启动会重新生成 ID 和密码）；选择「否」保留配置。\n\n默认：否（保留）"
+    ));
+    let caption = wide("RustDesk 便携版");
+    let ret = unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            caption.as_ptr(),
+            MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION | MB_TOPMOST,
+        )
+    };
+    ret == IDYES
+}
+
 fn execute(path: PathBuf, extract_dir: PathBuf, disposable: bool, args: Vec<String>, _ui: bool) {
     println!("executing {}", path.display());
     // setup env
     let exe = std::env::current_exe().unwrap_or_default();
     let exe_name = exe.file_name().unwrap_or_default();
-    let exe_dir = exe
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .to_path_buf();
+    let exe_dir = exe.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+    // A plain double-click (no CLI args) is the only case that should prompt on
+    // exit; --install / --quick_support and other flag-driven runs must not.
+    #[cfg(windows)]
+    let plain_launch = args.is_empty();
     // run executable
     let mut cmd = Command::new(path);
     cmd.args(args);
@@ -312,6 +367,18 @@ fn execute(path: PathBuf, extract_dir: PathBuf, disposable: bool, args: Vec<Stri
                 }
             }
             let _ = child.wait();
+            // Ask about the persistent config only on a plain launch of the
+            // portable build. "Yes" drops the config folder and the shared log
+            // folder; "No" (the default) keeps both. The disposable extracted
+            // files are removed either way below.
+            #[cfg(windows)]
+            if plain_launch {
+                let config_name = green_config_dir_name(exe_name);
+                if confirm_delete_config(&config_name) {
+                    let _ = std::fs::remove_dir_all(exe_dir.join(&config_name));
+                    let _ = std::fs::remove_dir_all(exe_dir.join("log"));
+                }
+            }
         }
         Err(e) => eprintln!("{:?}", e),
     }
