@@ -13,7 +13,7 @@ on:
         type: boolean
         default: false
       windows-only:
-        description: "Only build Windows targets (quick iteration)"
+        description: "Only build the Windows x86_64 target (quick iteration)"
         type: boolean
         default: false
 
@@ -147,10 +147,12 @@ jobs:
               target: windows-2022,
               platform: x64,
             }
-          - {
-              target: windows-11-arm,
-              platform: ARM64,
-            }
+          # x86_64-only mode: the ARM64 helper is only consumed by the aarch64
+          # flutter build (disabled below). Re-enable both together for a full build.
+          # - {
+          #     target: windows-11-arm,
+          #     platform: ARM64,
+          #   }
     with:
       upload-artifact: ${{ inputs.upload-artifact }}
       target: ${{ matrix.job.target }}
@@ -176,16 +178,16 @@ jobs:
               vcpkg-triplet: x64-windows-static,
               build-args: "--vram",
             }
-          - {
-              target: aarch64-pc-windows-msvc,
-              os: windows-11-arm,
-              arch: aarch64,
-              flutter-arch: arm64,
-              vcpkg-triplet: arm64-windows-static,
-              # vram is x86/x64-only (NVENC needs CUDA, Intel MediaSDK needs __rdtsc);
-              # no NV/Intel/AMD hardware exists on Windows-on-ARM, so vram stays disabled here.
-              build-args: "",
-            }
+          # x86_64-only mode: aarch64 is disabled. Uncomment for a full build
+          # (and re-enable the ARM64 TempTopMostWindow matrix entry above).
+          # - {
+          #     target: aarch64-pc-windows-msvc,
+          #     os: windows-11-arm,
+          #     arch: aarch64,
+          #     flutter-arch: arm64,
+          #     vcpkg-triplet: arm64-windows-static,
+          #     build-args: "",
+          #   }
     steps:
       - name: Export GitHub Actions cache environment variables
         uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
@@ -583,6 +585,8 @@ jobs:
 
   # The fallback for the flutter version, we use Sciter for 32bit Windows.
   build-for-windows-sciter:
+    # x86_64-only mode skips the 32-bit Sciter fallback entirely.
+    if: ${{ !inputs.windows-only }}
     name: ${{ matrix.job.target }} (${{ matrix.job.os }})
     needs: [validate-update-metadata-keys]
     runs-on: ${{ matrix.job.os }}

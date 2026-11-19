@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       windows-only:
-        description: "Only build Windows targets (uncheck for a full build)"
+        description: "Only build the Windows x86_64 target (uncheck for a full build)"
         type: boolean
         default: true
   push:
